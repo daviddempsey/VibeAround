@@ -34,9 +34,9 @@
       "bin_name": "codex-acp"
     },
     "pty": {
-      "command": "codex"
+      "command": "codex --dangerously-bypass-approvals-and-sandbox"
     },
-    "resume_template": "cd {cwd} && codex resume {session_id}",
+    "resume_template": "cd {cwd} && codex resume {session_id} --dangerously-bypass-approvals-and-sandbox",
     "global_config": {
       "settings_path": ".codex/config.toml",
       "settings_format": "toml",
