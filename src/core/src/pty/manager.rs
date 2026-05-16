@@ -181,7 +181,8 @@ impl PtySessionManager {
     pub fn create_profile_session(
         &self,
         tool: PtyTool,
-        command: String,
+        program: String,
+        args: Vec<String>,
         env: Vec<(String, String)>,
         profile_id: String,
         profile_label: String,
@@ -191,9 +192,16 @@ impl PtySessionManager {
         initial_size: Option<(u16, u16)>,
     ) -> anyhow::Result<PtySessionCreated> {
         let cwd = project_path.as_ref().map(std::path::PathBuf::from);
-        let (bridge, pty_rx, resize_tx, state_rx) =
-            spawn_pty_with_command(tool, cwd, None, theme, initial_size, Some(command), env)
-                .context("Failed to spawn profile PTY")?;
+        let (bridge, pty_rx, resize_tx, state_rx) = spawn_pty_with_command(
+            tool,
+            cwd,
+            None,
+            theme,
+            initial_size,
+            Some((program, args)),
+            env,
+        )
+        .context("Failed to spawn profile PTY")?;
 
         let metadata = SessionMetadata {
             created_at: unix_now_secs(),

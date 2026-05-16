@@ -62,6 +62,129 @@ fn bash_wrapper(
     wrap
 }
 
+#[cfg(windows)]
+fn windows_direct_spawn(
+    program: &str,
+    args: &[String],
+    cwd: Option<&Path>,
+    theme: Option<&str>,
+    extra_env: &[(String, String)],
+) -> CommandBuilder {
+    let (resolved_program, resolved_args) = resolve_windows_program(program, args);
+    let mut cmd = CommandBuilder::new(resolved_program);
+    for arg in &resolved_args {
+        cmd.arg(arg);
+    }
+    if let Some(dir) = cwd {
+        cmd.cwd(dir);
+    }
+    set_pty_env(&mut cmd, theme, extra_env);
+    cmd
+}
+
+/// On Windows, npm installs CLIs as `.cmd` + `.ps1` + extensionless shell-script
+/// shims that invoke `node <some>.js`. CreateProcessW can't execute the shell
+/// shim directly, and going through `cmd.exe /C` puts an intermediary process
+/// between the PTY and the TUI child that misroutes ConPTY resize events.
+/// When the program resolves to an npm shim, rewrite to `node <js>` so we can
+/// spawn the actual TUI directly under the PTY.
+#[cfg(windows)]
+fn resolve_windows_program(program: &str, args: &[String]) -> (String, Vec<String>) {
+    let Some(program_path) = find_windows_command(program) else {
+        return (program.to_string(), args.to_vec());
+    };
+    let ext = program_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase());
+    let Some(ext) = ext else {
+        return (program.to_string(), args.to_vec());
+    };
+    if ext != "cmd" && ext != "ps1" {
+        return (program_path.to_string_lossy().into_owned(), args.to_vec());
+    }
+    let Some(js_entry) = npm_shim_js_entry(&program_path) else {
+        return (program.to_string(), args.to_vec());
+    };
+    let mut rewritten = Vec::with_capacity(args.len() + 1);
+    rewritten.push(js_entry.to_string_lossy().into_owned());
+    rewritten.extend(args.iter().cloned());
+    ("node".to_string(), rewritten)
+}
+
+#[cfg(windows)]
+fn find_windows_command(program: &str) -> Option<std::path::PathBuf> {
+    let program = program.trim_matches('"');
+    let path = Path::new(program);
+    if path.is_absolute() || program.contains('\\') || program.contains('/') {
+        return existing_windows_command_path(path);
+    }
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        if let Some(found) = existing_windows_command_path(&dir.join(program)) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn existing_windows_command_path(base: &Path) -> Option<std::path::PathBuf> {
+    if base.extension().is_some() {
+        return base.exists().then(|| base.to_path_buf());
+    }
+    for ext in [".cmd", ".ps1", ".exe", ".com", ".bat"] {
+        let candidate = base.with_extension(ext.trim_start_matches('.'));
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn npm_shim_js_entry(shim_path: &Path) -> Option<std::path::PathBuf> {
+    let body = std::fs::read_to_string(shim_path).ok()?;
+    let token = extract_npm_shim_js_token(&body)?;
+    let base_dir = shim_path.parent()?;
+    let candidate = expand_npm_shim_js_token(base_dir, &token);
+    candidate.exists().then_some(candidate)
+}
+
+#[cfg(windows)]
+fn extract_npm_shim_js_token(body: &str) -> Option<String> {
+    for line in body.lines() {
+        let mut rest = line;
+        while let Some(start) = rest.find('"') {
+            rest = &rest[start + 1..];
+            let Some(end) = rest.find('"') else {
+                break;
+            };
+            let token = &rest[..end];
+            if let Some(js_pos) = token.to_ascii_lowercase().find(".js") {
+                return Some(token[..js_pos + 3].to_string());
+            }
+            rest = &rest[end + 1..];
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn expand_npm_shim_js_token(base_dir: &Path, token: &str) -> std::path::PathBuf {
+    let normalized = token.replace('\\', "/");
+    for prefix in ["%dp0%/", "%~dp0/", "$basedir/"] {
+        if let Some(rest) = normalized.strip_prefix(prefix) {
+            let mut path = base_dir.to_path_buf();
+            for segment in rest.split('/') {
+                path.push(segment);
+            }
+            return path;
+        }
+    }
+    std::path::PathBuf::from(token)
+}
+
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
@@ -95,20 +218,29 @@ fn command_for_tool(
     cwd: Option<&Path>,
     tmux_session: Option<&str>,
     theme: Option<&str>,
-    command_override: Option<&str>,
+    command_override: Option<(&str, &[String])>,
     extra_env: &[(String, String)],
 ) -> CommandBuilder {
-    if let Some(command) = command_override {
-        let line = if let Some(dir) = cwd {
-            format!(
-                "cd {} && exec {}",
-                shell_quote(&dir.to_string_lossy()),
-                command
-            )
-        } else {
-            format!("exec {}", command)
-        };
-        return bash_wrapper(&line, theme, extra_env);
+    if let Some((program, args)) = command_override {
+        #[cfg(windows)]
+        {
+            return windows_direct_spawn(program, args, cwd, theme, extra_env);
+        }
+        #[cfg(not(windows))]
+        {
+            let mut argv = String::new();
+            argv.push_str(&shell_quote(program));
+            for arg in args {
+                argv.push(' ');
+                argv.push_str(&shell_quote(arg));
+            }
+            let line = if let Some(dir) = cwd {
+                format!("cd {} && exec {}", shell_quote(&dir.to_string_lossy()), argv)
+            } else {
+                format!("exec {}", argv)
+            };
+            return bash_wrapper(&line, theme, extra_env);
+        }
     }
 
     if let Some(dir) = cwd {
@@ -322,7 +454,7 @@ pub(super) fn spawn_pty_with_command(
     tmux_session: Option<String>,
     theme: Option<String>,
     initial_size: Option<(u16, u16)>,
-    command_override: Option<String>,
+    command_override: Option<(String, Vec<String>)>,
     extra_env: Vec<(String, String)>,
 ) -> anyhow::Result<(
     PtyBridge,
@@ -346,7 +478,9 @@ pub(super) fn spawn_pty_with_command(
         cwd.as_deref(),
         tmux_session.as_deref(),
         theme.as_deref(),
-        command_override.as_deref(),
+        command_override
+            .as_ref()
+            .map(|(prog, args)| (prog.as_str(), args.as_slice())),
         &extra_env,
     );
     let child = pair

@@ -130,11 +130,13 @@ pub async fn create_session_handler(
                     format!("agent '{}' cannot be launched in a PTY", agent_id),
                 )
             })?;
+            let (program, all_args) = split_program_and_args(&agent.pty.command, &command_args);
             state
                 .pty_manager
                 .create_profile_session(
                     pty_tool,
-                    command_with_args(&agent.pty.command, &command_args),
+                    program,
+                    all_args,
                     env,
                     profile.id.clone(),
                     profile.label.clone(),
@@ -208,18 +210,14 @@ pub async fn delete_session_handler(
     }
 }
 
-fn command_with_args(command: &str, args: &[String]) -> String {
-    if args.is_empty() {
-        return command.to_string();
-    }
-    let mut out = command.to_string();
-    for arg in args {
-        out.push(' ');
-        out.push_str(&shell_quote(arg));
-    }
-    out
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
+/// Split an agent's `pty.command` (which may contain baked-in args like
+/// `"claude code --permission-mode acceptEdits"`) into `(program, args)`, then
+/// append the proxy-launch `command_args`. Whitespace split is sufficient
+/// because `agents.json` doesn't put quoted strings in `pty.command`.
+fn split_program_and_args(command: &str, extra_args: &[String]) -> (String, Vec<String>) {
+    let mut tokens = command.split_whitespace();
+    let program = tokens.next().unwrap_or("").to_string();
+    let mut args: Vec<String> = tokens.map(str::to_string).collect();
+    args.extend(extra_args.iter().cloned());
+    (program, args)
 }
