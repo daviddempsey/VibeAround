@@ -100,7 +100,7 @@ impl ServerDaemon {
             tunnels: TunnelManager::new(),
             pty: common::pty::new_registry(),
             port,
-            auth_token: Arc::new(AuthToken::generate()),
+            auth_token: Arc::new(AuthToken::from_env_or_generate()),
         }
     }
 

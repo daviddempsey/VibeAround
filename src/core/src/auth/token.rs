@@ -47,6 +47,28 @@ impl AuthToken {
         Self(hex_encode(&bytes))
     }
 
+    /// Use `VIBEAROUND_AUTH_TOKEN` from the environment if set and non-empty,
+    /// otherwise generate a fresh token.
+    ///
+    /// Intended for trusted-proxy deployments (e.g. behind oauth2-proxy in
+    /// Kubernetes) where the proxy needs to know the token to inject
+    /// `Authorization: Bearer <token>` on upstream requests. The env value
+    /// becomes the single source of truth — VibeAround writes it to
+    /// `auth.json` and the proxy reads it from the same Kubernetes Secret,
+    /// so the two can never diverge.
+    ///
+    /// Desktop installs leave the env unset and continue to get a fresh
+    /// per-start token.
+    pub fn from_env_or_generate() -> Self {
+        if let Ok(value) = std::env::var("VIBEAROUND_AUTH_TOKEN") {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Self(trimmed.to_string());
+            }
+        }
+        Self::generate()
+    }
+
     /// Borrow the token as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
