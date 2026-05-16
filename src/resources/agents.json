@@ -8,7 +8,8 @@
     "acp": {
       "program": "node",
       "npm_package": "@agentclientprotocol/claude-agent-acp",
-      "bin_name": "claude-agent-acp"
+      "bin_name": "claude-agent-acp",
+      "args": ["--dangerously-skip-permissions"]
     },
     "pty": {
       "command": "claude --dangerously-skip-permissions"

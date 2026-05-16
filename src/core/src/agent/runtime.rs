@@ -321,10 +321,9 @@ async fn resolve_agent_program(agent_id: &str) -> anyhow::Result<(String, Vec<St
         }
         let entry = crate::process::env::resolve_acp_agent_bin(bin_name)
             .with_context(|| format!("Resolving ACP agent '{}' (npm: {})", agent_id, npm_pkg))?;
-        Ok((
-            "node".to_string(),
-            vec![entry.to_string_lossy().to_string()],
-        ))
+        let mut args = vec![entry.to_string_lossy().to_string()];
+        args.extend(agent_def.acp.args.clone());
+        Ok(("node".to_string(), args))
     } else if let Some(install_cmd) = &agent_def.acp.install_cmd {
         if !super::install::is_program_available(&agent_def.acp.program) {
             tracing::info!("[{}-agent] auto-installing via install cmd ...", agent_id);
