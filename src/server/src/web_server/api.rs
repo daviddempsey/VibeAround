@@ -4,12 +4,14 @@
 //! declarations in `web_server::mod` stable while the implementation stays
 //! grouped by feature area.
 
+mod health;
 mod previews;
 mod profiles;
 mod runtime;
 mod sessions;
 mod workspaces;
 
+pub use health::{liveness_handler, readiness_handler};
 pub use previews::{delete_preview_handler, list_previews_handler};
 pub use profiles::list_profiles_handler;
 pub use runtime::{

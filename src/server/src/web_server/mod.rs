@@ -282,6 +282,10 @@ pub async fn run_web_server(
 
     let public = Router::new()
         .merge(proxy_routes)
+        // Health probes for kubelet / orchestrator — public because k8s
+        // probes can't carry a bearer token. See api::health for semantics.
+        .route("/healthz", get(api::liveness_handler))
+        .route("/readyz", get(api::readiness_handler))
         .route(
             "/internal/agent-hooks/codex",
             post(agent_hooks::codex_hook_handler),
