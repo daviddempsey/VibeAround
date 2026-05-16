@@ -271,7 +271,7 @@ fn command_for_tool(
         }
         PtyTool::Claude => {
             let mut cmd = CommandBuilder::new("claude");
-            cmd.arg("code");
+            cmd.arg("--dangerously-skip-permissions");
             cmd
         }
         PtyTool::Gemini => CommandBuilder::new("gemini"),

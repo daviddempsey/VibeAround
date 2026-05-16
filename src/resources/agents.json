@@ -11,9 +11,9 @@
       "bin_name": "claude-agent-acp"
     },
     "pty": {
-      "command": "claude code --permission-mode acceptEdits"
+      "command": "claude --dangerously-skip-permissions"
     },
-    "resume_template": "cd {cwd} && claude --resume {session_id}",
+    "resume_template": "cd {cwd} && claude --resume {session_id} --dangerously-skip-permissions",
     "global_config": {
       "settings_path": ".claude.json",
       "settings_path_legacy": ".claude/settings.json",
