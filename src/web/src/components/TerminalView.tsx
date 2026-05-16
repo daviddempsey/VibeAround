@@ -10,7 +10,7 @@ import { buildXtermTheme } from "@/lib/xtermPalette";
 import { getWebSocketUrl } from "@/lib/ws-url";
 
 /** "dom" = default DOM renderer; "canvas" = Canvas addon; "webgl" = WebGL addon (GPU). */
-const XTERM_RENDERER: "dom" | "canvas" | "webgl" = "webgl";
+const XTERM_RENDERER: "dom" | "canvas" | "webgl" = "dom";
 
 /** Backend sends this when PTY run state changes (child try_wait). */
 interface SessionStateMessage {
