@@ -120,7 +120,7 @@ fn resolve_proxy_settings(
         .overrides
         .get(target_api_type)
         .and_then(|overrides| overrides.reasoning_effort.clone())
-        .unwrap_or_else(|| "medium".to_string());
+        .unwrap_or_else(|| "high".to_string());
 
     Ok(ProxyLaunchSettings {
         target_api_type: target_api_type.to_string(),
