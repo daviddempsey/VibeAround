@@ -68,6 +68,10 @@ pub(crate) struct AppState {
     preview_client: reqwest::Client,
     /// Codex/agent lifecycle events received from bundled hook helpers.
     hook_registry: Arc<AgentHookRegistry>,
+    /// Shared bearer token. The SPA fallback uses it to detect requests
+    /// pre-authenticated by an upstream proxy (oauth2-proxy etc.) and
+    /// splice the token into the HTML so the SPA boots already-authed.
+    auth_token: Arc<AuthToken>,
 }
 
 /// Ensure web dist exists (build web first).
@@ -85,34 +89,82 @@ fn verify_web_dist(
     Ok(())
 }
 
-async fn spa_fallback(dist_path: PathBuf) -> Response {
+/// Serve the SPA's index.html.
+///
+/// When `inject_token` is `Some(hex)` the function splices a
+/// `<meta name="vibearound-token" content="hex">` tag right before
+/// `</head>`. The SPA's `initAuthFromUrl` reads that tag and stores
+/// the token in sessionStorage, so a request that arrives already
+/// authenticated by an upstream proxy (e.g. oauth2-proxy injecting
+/// `Authorization: Bearer …`) lands directly on the dashboard
+/// instead of the pairing gate.
+pub(crate) async fn spa_fallback(dist_path: PathBuf, inject_token: Option<&str>) -> Response {
     let index_path = dist_path.join("index.html");
-    match tokio::fs::read_to_string(&index_path).await {
-        Ok(content) => Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "text/html; charset=utf-8")
-            .body(Body::from(content))
-            .unwrap_or_else(|_| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "failed to build response",
-                )
-                    .into_response()
-            }),
+    let content = match tokio::fs::read_to_string(&index_path).await {
+        Ok(s) => s,
         Err(e) => {
             tracing::info!("[VibeAround] Failed to read index.html: {}", e);
-            (
+            return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to load index.html: {}", e),
             )
-                .into_response()
+                .into_response();
         }
+    };
+
+    let body = match inject_token {
+        Some(token) => {
+            // Token is bare hex (`AuthToken::from_env_or_generate` strips
+            // any "Bearer " prefix), so it's HTML-attribute-safe as-is.
+            let meta = format!(
+                "<meta name=\"vibearound-token\" content=\"{}\"></head>",
+                token
+            );
+            content.replacen("</head>", &meta, 1)
+        }
+        None => content,
+    };
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/html; charset=utf-8")
+        // index.html must not be cached: a token spliced for one user
+        // would otherwise be served to the next.
+        .header("Cache-Control", "no-store")
+        .body(Body::from(body))
+        .unwrap_or_else(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to build response",
+            )
+                .into_response()
+        })
+}
+
+/// Return `Some(token)` when the incoming request carries an
+/// `Authorization: Bearer <X>` header whose `<X>` matches the daemon's
+/// stored auth token. Mirrors the extraction half of `require_auth` but
+/// is callable from public routes (the SPA shell is un-authed but still
+/// needs to know if the caller is already authed by an upstream proxy).
+fn matched_bearer<'a>(headers: &axum::http::HeaderMap, token: &'a AuthToken) -> Option<&'a str> {
+    let raw = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())?;
+    let candidate = raw
+        .strip_prefix("Bearer ")
+        .or_else(|| raw.strip_prefix("bearer "))?
+        .trim();
+    if token.matches(candidate) {
+        Some(token.as_str())
+    } else {
+        None
     }
 }
 
 async fn spa_fallback_handler(
     axum::extract::State(state): axum::extract::State<AppState>,
     axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+    headers: axum::http::HeaderMap,
 ) -> Response {
     if is_dashboard_api_path(uri.path()) {
         return (
@@ -127,7 +179,8 @@ async fn spa_fallback_handler(
             .into_response();
     }
 
-    spa_fallback(state.dist_for_fallback.clone()).await
+    let injected = matched_bearer(&headers, &state.auth_token);
+    spa_fallback(state.dist_for_fallback.clone(), injected).await
 }
 
 fn is_dashboard_api_path(path: &str) -> bool {
@@ -181,6 +234,7 @@ pub async fn run_web_server(
         port,
         preview_client,
         hook_registry,
+        auth_token: Arc::clone(&auth_token),
     };
 
     let auth_state = AuthState {

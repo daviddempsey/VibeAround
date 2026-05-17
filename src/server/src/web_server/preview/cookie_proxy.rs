@@ -40,7 +40,12 @@ pub async fn cookie_proxy_fallback(State(state): State<AppState>, req: Request) 
     // Never proxy /va/ paths — they belong to the dashboard.
     let path = req.uri().path();
     if path == "/va" || path.starts_with("/va/") {
-        return crate::web_server::spa_fallback(state.dist_for_fallback.clone()).await;
+        // Cookie proxy fallback doesn't have access to the auth state
+        // here; SPA loads under this path are rare (preview-cookie
+        // misses), and the SPA's pairing flow + `?token=` URL trick
+        // still cover them. Auto-auth via meta tag is opt-in to the
+        // primary `/va/` route.
+        return crate::web_server::spa_fallback(state.dist_for_fallback.clone(), None).await;
     }
 
     // Check Sec-Fetch-Dest: only allow iframe and sub-resource contexts.
