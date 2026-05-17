@@ -180,11 +180,11 @@ async fn spa_fallback_handler(
     }
 
     let injected = matched_bearer(&headers, &state.auth_token);
-    tracing::info!(
-        has_auth_header = headers.get(axum::http::header::AUTHORIZATION).is_some(),
-        injected = injected.is_some(),
-        token_len = state.auth_token.as_str().len(),
-        "spa_fallback auth check"
+    eprintln!(
+        "[VibeAround] spa_fallback auth: has_auth_header={} injected={} token_len={}",
+        headers.get(axum::http::header::AUTHORIZATION).is_some(),
+        injected.is_some(),
+        state.auth_token.as_str().len(),
     );
     spa_fallback(state.dist_for_fallback.clone(), injected).await
 }
