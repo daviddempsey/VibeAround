@@ -112,6 +112,12 @@ pub(crate) async fn spa_fallback(dist_path: PathBuf, inject_token: Option<&str>)
         }
     };
 
+    eprintln!(
+        "[VibeAround] spa_fallback token inject: is_some={} token_len={} head_pos={}",
+        inject_token.is_some(),
+        inject_token.unwrap_or("").len(),
+        content.find("</head>").map(|p| p as i64).unwrap_or(-1),
+    );
     let body = match inject_token {
         Some(token) => {
             // Token is bare hex (`AuthToken::from_env_or_generate` strips
@@ -120,7 +126,9 @@ pub(crate) async fn spa_fallback(dist_path: PathBuf, inject_token: Option<&str>)
                 "<meta name=\"vibearound-token\" content=\"{}\"></head>",
                 token
             );
-            content.replacen("</head>", &meta, 1)
+            let replaced = content.replacen("</head>", &meta, 1);
+            eprintln!("[VibeAround] spa_fallback body: orig={} new={}", content.len(), replaced.len());
+            replaced
         }
         None => content,
     };
