@@ -19,7 +19,7 @@ use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get, post};
 use axum::Router;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::services::ServeDir;
@@ -136,7 +136,10 @@ fn is_dashboard_api_path(path: &str) -> bool {
         .any(|prefix| path.starts_with(prefix))
 }
 
-/// Runs the Axum server (static files + WebSocket + session API). Binds to 127.0.0.1 (localhost only).
+/// Runs the Axum server (static files + WebSocket + session API).
+/// Bind address defaults to 127.0.0.1 (desktop / local dev) but can be
+/// overridden with `VIBEAROUND_BIND_ADDR` — set to `0.0.0.0` when running
+/// inside a container so the kubelet / reverse proxy can reach the port.
 /// Call from desktop via tauri::async_runtime::spawn, or run standalone via the server binary.
 pub async fn run_web_server(
     port: u16,
@@ -152,10 +155,16 @@ pub async fn run_web_server(
     let web_dist = dist_path
         .canonicalize()
         .map_err(|e| format!("Failed to resolve web dist path: {}", e))?;
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let bind_ip: IpAddr = match std::env::var("VIBEAROUND_BIND_ADDR") {
+        Ok(s) => s.parse().map_err(|e| {
+            format!("VIBEAROUND_BIND_ADDR={s:?} is not a valid IP address: {e}")
+        })?,
+        Err(_) => IpAddr::V4(Ipv4Addr::LOCALHOST),
+    };
+    let addr = SocketAddr::new(bind_ip, port);
     println!(
-        "[VibeAround] Web dashboard: http://127.0.0.1:{}/va/, serving from {:?}",
-        port, web_dist
+        "[VibeAround] Web dashboard: http://{}/va/, serving from {:?}",
+        addr, web_dist
     );
 
     let assets_dir = web_dist.join("assets");
@@ -174,7 +183,12 @@ pub async fn run_web_server(
         hook_registry,
     };
 
-    let auth_state = AuthState(Arc::clone(&auth_token));
+    let auth_state = AuthState {
+        token: Arc::clone(&auth_token),
+        // Honor the Host-header loopback shortcut only when the kernel is
+        // actually enforcing loopback at the socket layer — see AuthState docs.
+        trust_loopback_host_header: bind_ip.is_loopback(),
+    };
 
     // --- Protected routes: require a valid token on every request. ----------
     //
@@ -324,10 +338,7 @@ pub async fn run_web_server(
         }
         e
     })?;
-    println!(
-        "[VibeAround] Web server listening on http://127.0.0.1:{}",
-        port
-    );
+    println!("[VibeAround] Web server listening on http://{}", addr);
     axum::serve(listener, app).await?;
     Ok(())
 }

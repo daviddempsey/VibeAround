@@ -31,7 +31,15 @@ use common::auth::AuthToken;
 
 /// Shared handle to the server's current auth token.
 #[derive(Clone)]
-pub struct AuthState(pub Arc<AuthToken>);
+pub struct AuthState {
+    pub token: Arc<AuthToken>,
+    /// When the server is bound to a loopback address, the kernel guarantees
+    /// that only same-host callers can connect — so honoring `Host: localhost`
+    /// as proof-of-loopback is safe. When bound to a non-loopback address
+    /// (e.g. `0.0.0.0` inside a container), any network caller can spoof the
+    /// Host header, so this short-circuit MUST be disabled or auth is bypassed.
+    pub trust_loopback_host_header: bool,
+}
 
 /// Extract a bearer token from the request — header first, then `?token=`.
 fn extract_token<B>(req: &Request<B>) -> Option<String> {
@@ -90,13 +98,13 @@ pub async fn require_auth(
     next: Next,
 ) -> Response {
     let is_mcp = req.uri().path() == "/mcp";
-    if is_loopback_dashboard(&req) {
+    if state.trust_loopback_host_header && is_loopback_dashboard(&req) {
         return next.run(req).await;
     }
 
     let token = extract_token(&req);
     let authorized = match token.as_deref() {
-        Some(candidate) => state.0.matches(candidate),
+        Some(candidate) => state.token.matches(candidate),
         None => false,
     };
     if authorized {
