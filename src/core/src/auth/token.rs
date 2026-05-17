@@ -57,13 +57,21 @@ impl AuthToken {
     /// `auth.json` and the proxy reads it from the same Kubernetes Secret,
     /// so the two can never diverge.
     ///
+    /// oauth2-proxy's `injectRequestHeaders` uses the env value as the
+    /// complete `Authorization` header value, so the Secret often stores
+    /// the full `"Bearer <hex>"` string. We strip any leading `Bearer `
+    /// before constructing the token so the *stored* AuthToken is always
+    /// the bare hex — that way `Authorization: Bearer <hex>` requests
+    /// match cleanly regardless of which side prepended the scheme.
+    ///
     /// Desktop installs leave the env unset and continue to get a fresh
     /// per-start token.
     pub fn from_env_or_generate() -> Self {
         if let Ok(value) = std::env::var("VIBEAROUND_AUTH_TOKEN") {
             let trimmed = value.trim();
             if !trimmed.is_empty() {
-                return Self(trimmed.to_string());
+                let bare = strip_bearer_prefix(trimmed);
+                return Self(bare.to_string());
             }
         }
         Self::generate()
@@ -150,6 +158,17 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
+/// Strip a single leading, case-insensitive `Bearer ` (with any trailing
+/// whitespace) from a token string. Returns the original slice if there
+/// is no such prefix.
+fn strip_bearer_prefix(s: &str) -> &str {
+    if s.len() >= 7 && s[..7].eq_ignore_ascii_case("bearer ") {
+        s[7..].trim_start()
+    } else {
+        s
+    }
+}
+
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -186,6 +205,40 @@ mod tests {
         assert!(!t.matches("0000000000000000000000000000000000000000000000000000000000000000"));
         assert!(!t.matches(""));
         assert!(!t.matches("short"));
+    }
+
+    #[test]
+    fn strip_bearer_prefix_works() {
+        assert_eq!(strip_bearer_prefix("deadbeef"), "deadbeef");
+        assert_eq!(strip_bearer_prefix("Bearer deadbeef"), "deadbeef");
+        assert_eq!(strip_bearer_prefix("bearer deadbeef"), "deadbeef");
+        assert_eq!(strip_bearer_prefix("BEARER deadbeef"), "deadbeef");
+        // Extra whitespace after the scheme is tolerated.
+        assert_eq!(strip_bearer_prefix("Bearer  deadbeef"), "deadbeef");
+        // A token that just happens to start with "Bearer" (no space) is left alone.
+        assert_eq!(strip_bearer_prefix("Bearerdeadbeef"), "Bearerdeadbeef");
+        // Empty / short inputs are passed through unchanged.
+        assert_eq!(strip_bearer_prefix(""), "");
+        assert_eq!(strip_bearer_prefix("Bearer"), "Bearer");
+    }
+
+    #[test]
+    fn from_env_strips_bearer_prefix() {
+        // Use a process-unique env var name so this test doesn't race with
+        // other tests touching VIBEAROUND_AUTH_TOKEN.
+        let cases = [
+            ("deadbeef", "deadbeef"),
+            ("Bearer deadbeef", "deadbeef"),
+            ("  Bearer deadbeef  ", "deadbeef"),
+        ];
+        for (input, want) in cases {
+            // SAFETY: tests run single-threaded by default in this crate
+            // for env-touching assertions; if you parallelize, isolate this.
+            unsafe { std::env::set_var("VIBEAROUND_AUTH_TOKEN", input) };
+            let t = AuthToken::from_env_or_generate();
+            assert_eq!(t.as_str(), want, "input={input:?}");
+        }
+        unsafe { std::env::remove_var("VIBEAROUND_AUTH_TOKEN") };
     }
 
     #[test]
