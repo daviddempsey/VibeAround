@@ -112,12 +112,6 @@ pub(crate) async fn spa_fallback(dist_path: PathBuf, inject_token: Option<&str>)
         }
     };
 
-    eprintln!(
-        "[VibeAround] spa_fallback token inject: is_some={} token_len={} head_pos={}",
-        inject_token.is_some(),
-        inject_token.unwrap_or("").len(),
-        content.find("</head>").map(|p| p as i64).unwrap_or(-1),
-    );
     let body = match inject_token {
         Some(token) => {
             // Token is bare hex (`AuthToken::from_env_or_generate` strips
@@ -126,9 +120,7 @@ pub(crate) async fn spa_fallback(dist_path: PathBuf, inject_token: Option<&str>)
                 "<meta name=\"vibearound-token\" content=\"{}\"></head>",
                 token
             );
-            let replaced = content.replacen("</head>", &meta, 1);
-            eprintln!("[VibeAround] spa_fallback body: orig={} new={}", content.len(), replaced.len());
-            replaced
+            content.replacen("</head>", &meta, 1)
         }
         None => content,
     };
@@ -154,7 +146,7 @@ pub(crate) async fn spa_fallback(dist_path: PathBuf, inject_token: Option<&str>)
 /// stored auth token. Mirrors the extraction half of `require_auth` but
 /// is callable from public routes (the SPA shell is un-authed but still
 /// needs to know if the caller is already authed by an upstream proxy).
-fn matched_bearer<'a>(headers: &axum::http::HeaderMap, token: &'a AuthToken) -> Option<&'a str> {
+pub(crate) fn matched_bearer<'a>(headers: &axum::http::HeaderMap, token: &'a AuthToken) -> Option<&'a str> {
     let raw = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())?;
@@ -188,12 +180,6 @@ async fn spa_fallback_handler(
     }
 
     let injected = matched_bearer(&headers, &state.auth_token);
-    eprintln!(
-        "[VibeAround] spa_fallback auth: has_auth_header={} injected={} token_len={}",
-        headers.get(axum::http::header::AUTHORIZATION).is_some(),
-        injected.is_some(),
-        state.auth_token.as_str().len(),
-    );
     spa_fallback(state.dist_for_fallback.clone(), injected).await
 }
 
